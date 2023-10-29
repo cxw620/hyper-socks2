@@ -41,7 +41,7 @@ use futures::{
     task::{Context, Poll},
 };
 use http::uri::Scheme;
-use hyper::{service::Service, Uri};
+use hyper::{client::HttpConnector, service::Service, Uri};
 #[cfg(feature = "rustls")]
 use hyper_rustls::HttpsConnector;
 #[cfg(feature = "tls")]
@@ -69,13 +69,31 @@ pub enum Error {
         io::Error,
     ),
     #[error("{0}")]
+    Uri(
+        #[from]
+        #[source]
+        http::uri::InvalidUri,
+    ),
+    #[error("{0}")]
     Connector(
         #[from]
         #[source]
         BoxedError,
     ),
     #[error("Missing host")]
-    MissingHost,
+    HostMissing,
+    #[error("Invalid url scheme")]
+    InvalidScheme,
+    #[error("Missing url scheme")]
+    SchemeMissing,
+    #[error("Invalid url authority")]
+    InvalidAuthority,
+    #[error("Missing url authority")]
+    AuthorityMissing,
+    #[error("Authority with invalid user_info")]
+    InvalidUserInfo,
+    #[error("Missing url port")]
+    PortMissing,
 }
 
 /// A future is returned from [`SocksConnector`] service
@@ -95,6 +113,68 @@ pub struct SocksConnector<C> {
 }
 
 impl<C> SocksConnector<C> {
+    /// Create a new `SocksConnector`from proxy dest uri,
+    /// e.g. `socks5://username:password@example.com:7890`
+    pub fn new(uri: &str) -> Result<SocksConnector<HttpConnector>, Error> {
+        let proxy_addr = Self::parse_uri(uri)?;
+        let auth = Self::parse_user_info(&proxy_addr);
+        let mut connector = HttpConnector::new();
+        connector.enforce_http(false);
+        connector.set_nodelay(true);
+        Ok(SocksConnector {
+            proxy_enable: true,
+            proxy_addr,
+            auth,
+            connector,
+        })
+    }
+
+    /// Create a new `SocksConnector`from proxy dest uri and custom connector **NOT RECOMMENDED**
+    pub fn new_with_connector(uri: &str, connector: C) -> Result<Self, Error> {
+        let proxy_addr = Self::parse_uri(uri)?;
+        let auth = Self::parse_user_info(&proxy_addr);
+        Ok(Self {
+            proxy_enable: true,
+            proxy_addr,
+            auth,
+            connector,
+        })
+    }
+
+    #[inline]
+    fn parse_uri(uri: &str) -> Result<Uri, Error> {
+        uri.parse::<Uri>()
+            .map_err(|e| Error::Uri(e))
+            .and_then(|url| {
+                match url.scheme_str() {
+                    Some("socks5") => {}
+                    Some(_) => return Err(Error::InvalidScheme),
+                    None => return Err(Error::SchemeMissing),
+                }
+                if url.authority().is_none() {
+                    return Err(Error::AuthorityMissing);
+                }
+                if url.port().is_none() {
+                    return Err(Error::PortMissing);
+                }
+                Ok(url)
+            })
+    }
+
+    #[inline]
+    fn parse_user_info(uri: &Uri) -> Option<Auth> {
+        uri.authority()
+            .unwrap()
+            .as_str()
+            .rsplit_once("@")
+            .and_then(|(user_info, _)| {
+                user_info.split_once(":").map(|(username, password)| Auth {
+                    username: username.to_string(),
+                    password: password.to_string(),
+                })
+            })
+    }
+
     /// Create a new connector with TLS support
     #[cfg(feature = "tls")]
     pub fn with_tls(self) -> Result<HttpsConnector<Self>, TlsError> {
@@ -147,7 +227,7 @@ where
             let host = target_addr
                 .host()
                 .map(str::to_string)
-                .ok_or(Error::MissingHost)?;
+                .ok_or(Error::HostMissing)?;
             let port =
                 target_addr
                     .port_u16()
