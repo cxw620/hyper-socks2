@@ -11,6 +11,7 @@
 //! let mut connector = HttpConnector::new();
 //! connector.enforce_http(false);
 //! let proxy = SocksConnector {
+//!     proxy_enable: true,
 //!     proxy_addr: Uri::from_static("socks5://your.socks5.proxy:1080"), // scheme is required by HttpConnector
 //!     auth: None,
 //!     connector,
@@ -87,6 +88,7 @@ pub type BoxedError = Box<dyn std::error::Error + Send + Sync>;
 /// A SOCKS5 proxy information and TCP connector
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SocksConnector<C> {
+    pub proxy_enable: bool,
     pub proxy_addr: Uri,
     pub auth: Option<Auth>,
     pub connector: C,
@@ -141,28 +143,36 @@ where
     C::Error: Into<BoxedError>,
 {
     async fn call_async(mut self, target_addr: Uri) -> Result<C::Response, Error> {
-        let host = target_addr
-            .host()
-            .map(str::to_string)
-            .ok_or(Error::MissingHost)?;
-        let port =
-            target_addr
-                .port_u16()
-                .unwrap_or(if target_addr.scheme() == Some(&Scheme::HTTPS) {
-                    443
-                } else {
-                    80
-                });
-        let target_addr = AddrKind::Domain(host, port);
-
-        let stream = self
-            .connector
-            .call(self.proxy_addr)
-            .await
-            .map_err(Into::<BoxedError>::into)?;
-        let mut buf_stream = BufStream::new(stream); // fixes issue #3
-        let _ = async_socks5::connect(&mut buf_stream, target_addr, self.auth).await?;
-        Ok(buf_stream.into_inner())
+        if self.proxy_enable {
+            let host = target_addr
+                .host()
+                .map(str::to_string)
+                .ok_or(Error::MissingHost)?;
+            let port =
+                target_addr
+                    .port_u16()
+                    .unwrap_or(if target_addr.scheme() == Some(&Scheme::HTTPS) {
+                        443
+                    } else {
+                        80
+                    });
+            let target_addr = AddrKind::Domain(host, port);
+            let stream = self
+                .connector
+                .call(self.proxy_addr)
+                .await
+                .map_err(Into::<BoxedError>::into)?;
+            let mut buf_stream = BufStream::new(stream); // fixes issue #3
+            let _ = async_socks5::connect(&mut buf_stream, target_addr, self.auth).await?;
+            Ok(buf_stream.into_inner())
+        } else {
+            let stream = self
+                .connector
+                .call(target_addr)
+                .await
+                .map_err(Into::<BoxedError>::into)?;
+            Ok(stream)
+        }
     }
 }
 
@@ -239,6 +249,7 @@ mod tests {
             let mut connector = HttpConnector::new();
             connector.enforce_http(false);
             let socks = SocksConnector {
+                proxy_enable: true,
                 proxy_addr: Uri::from_static(PROXY_ADDR),
                 auth: self.auth,
                 connector,
