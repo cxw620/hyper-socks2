@@ -175,6 +175,12 @@ impl<C> SocksConnector<C> {
             })
     }
 
+    /// Enable or disable proxy
+    pub fn enable_proxy(mut self, proxy_enable: bool) -> Self {
+        self.proxy_enable = proxy_enable;
+        self
+    }
+
     /// Create a new connector with TLS support
     #[cfg(feature = "tls")]
     pub fn with_tls(self) -> Result<HttpsConnector<Self>, TlsError> {
