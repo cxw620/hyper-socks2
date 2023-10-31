@@ -112,23 +112,25 @@ pub struct SocksConnector<C> {
     pub connector: C,
 }
 
-impl<C> SocksConnector<C> {
+impl SocksConnector<HttpConnector> {
     /// Create a new `SocksConnector`from proxy dest uri,
     /// e.g. `socks5://username:password@example.com:7890`
-    pub fn new(uri: &str) -> Result<SocksConnector<HttpConnector>, Error> {
+    pub fn new(uri: &str) -> Result<Self, Error> {
         let proxy_addr = Self::parse_uri(uri)?;
         let auth = Self::parse_user_info(&proxy_addr);
         let mut connector = HttpConnector::new();
         connector.enforce_http(false);
         connector.set_nodelay(true);
-        Ok(SocksConnector {
+        Ok(Self {
             proxy_enable: true,
             proxy_addr,
             auth,
             connector,
         })
     }
+}
 
+impl<C> SocksConnector<C> {
     /// Create a new `SocksConnector`from proxy dest uri and custom connector **NOT RECOMMENDED**
     pub fn new_with_connector(uri: &str, connector: C) -> Result<Self, Error> {
         let proxy_addr = Self::parse_uri(uri)?;
